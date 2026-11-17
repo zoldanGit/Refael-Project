@@ -1,0 +1,5 @@
+#!/bin/bash
+# Bridge the guest's UART0 (QEMU socket /tmp/qemu-uart) to a host pty at
+# /tmp/virtual-uart. Start ./run_qemu first; leave this running in its own terminal.
+# Then open /tmp/virtual-uart with picocom or pyserial.
+exec socat PTY,link=/tmp/virtual-uart,raw,echo=0 UNIX-CONNECT:/tmp/qemu-uart

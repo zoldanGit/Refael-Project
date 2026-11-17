@@ -1,0 +1,39 @@
+#!/bin/bash
+# Boot the ARM guest (vexpress-a15, Linux 6.18.50). Run as your user, never as root.
+#
+#   ./run_qemu              NFS root over tap0 (run ./lab-up.sh first)
+#   ./run_qemu --initramfs  root filesystem in RAM, no tap0/NFS/sudo needed
+#
+# Console (ttyAMA1) is this terminal: log in as root, no password; 'poweroff' to quit.
+# Ctrl+C goes to the guest, not to QEMU (signal=off). Close QEMU with 'poweroff' in the guest,
+# ./lab-down.sh, or pkill qemu-system-arm.
+# UART0 (ttyAMA0) is the socket /tmp/qemu-uart; ./setupuart bridges it to /tmp/virtual-uart.
+# Override with environment variables: KERNEL=, DTB=, QEMU=.
+set -euo pipefail
+A=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+[ "$EUID" -ne 0 ] || { echo 'Do not run QEMU as root.' >&2; exit 1; }
+KERNEL=${KERNEL:-$A/images/zImage}
+DTB=${DTB:-$A/images/vexpress-v2p-ca15-tc1.dtb}
+QEMU=${QEMU:-qemu-system-arm}
+PIDFILE=/tmp/armsystem-qemu.pid
+# shellcheck disable=SC2054  # the commas belong to QEMU option values
+COMMON=(-M vexpress-a15 -cpu cortex-a15 -smp 1 -m 512
+  -display none -monitor none -audio driver=none
+  -serial unix:/tmp/qemu-uart,server=on,wait=off
+  -chardev stdio,id=con,signal=off -serial chardev:con
+  -pidfile "$PIDFILE" -kernel "$KERNEL" -dtb "$DTB")
+
+if [ "${1:-}" = --initramfs ]; then
+  exec "$QEMU" "${COMMON[@]}" \
+    -netdev user,id=n0,net=192.168.0.0/24,host=192.168.0.1 \
+    -net nic,model=lan9118,netdev=n0 \
+    -initrd "$A/images/rootfs.cpio" \
+    -append 'console=ttyAMA1 rdinit=/sbin/init panic=-1'
+fi
+
+ip link show tap0 >/dev/null 2>&1 || { echo 'tap0 is missing; run ./lab-up.sh first.' >&2; exit 1; }
+[ -e "$A/outfs2/bin/busybox" ] || { echo "NFS root $A/outfs2 is not unpacked; run install.sh." >&2; exit 1; }
+exec "$QEMU" "${COMMON[@]}" \
+  -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \
+  -net nic,model=lan9118,netdev=n0 \
+  -append "console=ttyAMA1 root=/dev/nfs nfsroot=192.168.0.1:$A/outfs2,vers=3,tcp,nolock ip=192.168.0.2:192.168.0.1:192.168.0.1:255.255.255.0:qemu:eth0 rw init=/sbin/init panic=-1"
